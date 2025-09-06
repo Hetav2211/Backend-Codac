@@ -18,9 +18,26 @@ const __dirname = path.resolve();
 const app = express();
 
 // CORS Setup
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "https://frontend-codac.vercel.app",
+  /\.vercel\.app$/, // Allow all Vercel preview URLs
+];
+
 app.use(
   cors({
-    origin: [process.env.FRONTEND_URL, "http://localhost:5173"],
+    origin: (origin, callback) => {
+      if (
+        !origin ||
+        allowedOrigins.some((o) =>
+          typeof o === "string" ? o === origin : o.test(origin)
+        )
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
@@ -98,7 +115,18 @@ app.post("/create-checkout-session", async (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: [process.env.FRONTEND_URL, "http://localhost:5173"],
+    origin: (origin, callback) => {
+      if (
+        !origin ||
+        allowedOrigins.some((o) =>
+          typeof o === "string" ? o === origin : o.test(origin)
+        )
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   },
 });
