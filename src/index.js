@@ -30,7 +30,9 @@ app.use(
       if (
         !origin ||
         allowedOrigins.some((o) =>
-          typeof o === "string" ? o === origin : o.test(origin)
+          typeof o === "string"
+            ? o === origin
+            : o instanceof RegExp && o.test(origin)
         )
       ) {
         callback(null, true);
@@ -119,7 +121,9 @@ const io = new Server(server, {
       if (
         !origin ||
         allowedOrigins.some((o) =>
-          typeof o === "string" ? o === origin : o.test(origin)
+          typeof o === "string"
+            ? o === origin
+            : o instanceof RegExp && o.test(origin)
         )
       ) {
         callback(null, true);
