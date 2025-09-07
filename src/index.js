@@ -52,6 +52,11 @@ app.post(
   (req, res) => {
     const sig = req.headers["stripe-signature"];
 
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      console.log("Webhook secret not configured, skipping verification");
+      return res.json({ received: true });
+    }
+
     let event;
 
     try {
@@ -106,6 +111,11 @@ app.use("/api/feedback", feedbackRoutes);
 app.use("/api/chatbot", chatBotRoutes);
 
 // Stripe Setup
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error("❌ STRIPE_SECRET_KEY is not set in environment variables");
+  process.exit(1);
+}
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const plans = {
@@ -114,20 +124,30 @@ const plans = {
 };
 
 app.post("/api/create-checkout-session", async (req, res) => {
-  const { plan, price } = req.body;
-  const selected = plans[plan];
-
-  if (!selected)
-    return res.status(400).json({ error: "Invalid plan selected" });
-
-  // Use discounted price if provided and valid
-  let finalPrice = selected.price;
-  if (typeof price === "number" && price > 0 && price < selected.price) {
-    finalPrice = price * 100; // Convert to paise if price is in rupees
-    if (price > 1000) finalPrice = price; // If already in paise
-  }
-
   try {
+    console.log("Creating checkout session with data:", req.body);
+    
+    const { plan, price } = req.body;
+    
+    if (!plan) {
+      return res.status(400).json({ error: "Plan is required" });
+    }
+    
+    const selected = plans[plan];
+    if (!selected) {
+      console.error("Invalid plan selected:", plan);
+      return res.status(400).json({ error: "Invalid plan selected" });
+    }
+
+    // Use discounted price if provided and valid
+    let finalPrice = selected.price;
+    if (typeof price === "number" && price > 0 && price < selected.price) {
+      finalPrice = price * 100; // Convert to paise if price is in rupees
+      if (price > 1000) finalPrice = price; // If already in paise
+    }
+
+    console.log("Creating session with price:", finalPrice, "for plan:", plan);
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "subscription",
@@ -137,6 +157,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
             currency: "inr",
             product_data: {
               name: `${selected.name} Plan`,
+              description: `Monthly subscription for ${selected.name} plan`,
             },
             unit_amount: finalPrice,
             recurring: {
@@ -153,9 +174,10 @@ app.post("/api/create-checkout-session", async (req, res) => {
       },
     });
 
-    res.json({ sessionId: session.id });
+    console.log("Checkout session created successfully:", session.id);
+    res.json({ sessionId: session.id, url: session.url });
   } catch (err) {
-    console.error("Stripe error:", err);
+    console.error("Stripe checkout session error:", err);
     res.status(500).json({
       error: "Failed to create checkout session",
       details: err.message,
@@ -166,13 +188,51 @@ app.post("/api/create-checkout-session", async (req, res) => {
 // Get checkout session details
 app.get("/api/stripe/session/:sessionId", async (req, res) => {
   try {
-    const session = await stripe.checkout.sessions.retrieve(
-      req.params.sessionId
-    );
-    res.json(session);
+    const { sessionId } = req.params;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+
+    console.log("Retrieving session:", sessionId);
+    
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    
+    console.log("Session retrieved successfully:", session.id, "Status:", session.payment_status);
+    
+    res.json({
+      id: session.id,
+      payment_status: session.payment_status,
+      customer_email: session.customer_details?.email,
+      amount_total: session.amount_total,
+      currency: session.currency,
+      metadata: session.metadata
+    });
   } catch (err) {
     console.error("Error retrieving session:", err);
-    res.status(500).json({ error: "Failed to retrieve session" });
+    res.status(500).json({ 
+      error: "Failed to retrieve session", 
+      details: err.message 
+    });
+  }
+});
+
+// Debug endpoint to test Stripe configuration
+app.get("/api/stripe/test", async (req, res) => {
+  try {
+    // Test if Stripe is working by listing products (should return empty list)
+    const products = await stripe.products.list({ limit: 1 });
+    res.json({ 
+      status: "Stripe connection successful", 
+      hasProducts: products.data.length > 0,
+      availablePlans: Object.keys(plans)
+    });
+  } catch (err) {
+    console.error("Stripe test failed:", err);
+    res.status(500).json({ 
+      error: "Stripe connection failed", 
+      details: err.message 
+    });
   }
 });
 
@@ -264,3 +324,17 @@ if (process.env.NODE_ENV === "production") {
     res.sendFile(path.join(__dirname, "../frontend", "dist", "index.html"));
   });
 }
+
+// Global error handlers
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+
+// Keep the process alive
+process.stdin.resume();
