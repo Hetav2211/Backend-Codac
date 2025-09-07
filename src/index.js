@@ -11,6 +11,7 @@ import feedbackRoutes from "./routes/feedbackRoutes.js";
 import Stripe from "stripe";
 import path from "path";
 import chatBotRoutes from "./routes/chatBotRoutes.js";
+import User from "./models/User.js";
 
 dotenv.config();
 
@@ -44,6 +45,49 @@ app.use(
   })
 );
 
+// Stripe webhook endpoint (must be before express.json() middleware for raw body)
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    const sig = req.headers["stripe-signature"];
+
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.log(`Webhook signature verification failed.`, err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Handle the event
+    switch (event.type) {
+      case "checkout.session.completed":
+        const session = event.data.object;
+        console.log("Payment successful for session:", session.id);
+        // TODO: Update user subscription in database
+        break;
+      case "customer.subscription.updated":
+        const subscription = event.data.object;
+        console.log("Subscription updated:", subscription.id);
+        break;
+      case "customer.subscription.deleted":
+        const canceledSubscription = event.data.object;
+        console.log("Subscription canceled:", canceledSubscription.id);
+        break;
+      default:
+        console.log(`Unhandled event type ${event.type}`);
+    }
+
+    res.json({ received: true });
+  }
+);
+
 app.use(express.json());
 
 // Root endpoint to indicate server is running
@@ -69,7 +113,7 @@ const plans = {
   Team: { price: 249900, name: "Team" }, // ₹2499.00
 };
 
-app.post("/create-checkout-session", async (req, res) => {
+app.post("/api/create-checkout-session", async (req, res) => {
   const { plan, price } = req.body;
   const selected = plans[plan];
 
@@ -102,14 +146,66 @@ app.post("/create-checkout-session", async (req, res) => {
           quantity: 1,
         },
       ],
-      success_url: `${process.env.FRONTEND_URL}/success`,
+      success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL}/cancel`,
+      metadata: {
+        plan: plan,
+      },
     });
 
     res.json({ sessionId: session.id });
   } catch (err) {
     console.error("Stripe error:", err);
-    res.status(500).json({ error: "Failed to create checkout session" });
+    res.status(500).json({
+      error: "Failed to create checkout session",
+      details: err.message,
+    });
+  }
+});
+
+// Get checkout session details
+app.get("/api/stripe/session/:sessionId", async (req, res) => {
+  try {
+    const session = await stripe.checkout.sessions.retrieve(
+      req.params.sessionId
+    );
+    res.json(session);
+  } catch (err) {
+    console.error("Error retrieving session:", err);
+    res.status(500).json({ error: "Failed to retrieve session" });
+  }
+});
+
+// Update user plan with session verification
+app.post("/api/user/plan/verify", async (req, res) => {
+  try {
+    const { userId, plan, sessionId } = req.body;
+    if (!userId || !plan || !sessionId) {
+      return res.status(400).json({
+        message: "userId, plan, and sessionId are required",
+      });
+    }
+
+    // Verify the session
+    try {
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.payment_status !== "paid") {
+        return res.status(400).json({ message: "Payment not completed" });
+      }
+    } catch (err) {
+      return res.status(400).json({ message: "Invalid session ID" });
+    }
+
+    const user = await User.findByIdAndUpdate(userId, { plan }, { new: true });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    res.json({ message: "Plan updated successfully", plan: user.plan });
+  } catch (err) {
+    res.status(500).json({
+      message: "Failed to update plan",
+      error: err.message,
+    });
   }
 });
 
