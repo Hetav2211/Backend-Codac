@@ -126,13 +126,13 @@ const plans = {
 app.post("/api/create-checkout-session", async (req, res) => {
   try {
     console.log("Creating checkout session with data:", req.body);
-    
+
     const { plan, price } = req.body;
-    
+
     if (!plan) {
       return res.status(400).json({ error: "Plan is required" });
     }
-    
+
     const selected = plans[plan];
     if (!selected) {
       console.error("Invalid plan selected:", plan);
@@ -189,30 +189,35 @@ app.post("/api/create-checkout-session", async (req, res) => {
 app.get("/api/stripe/session/:sessionId", async (req, res) => {
   try {
     const { sessionId } = req.params;
-    
+
     if (!sessionId) {
       return res.status(400).json({ error: "Session ID is required" });
     }
 
     console.log("Retrieving session:", sessionId);
-    
+
     const session = await stripe.checkout.sessions.retrieve(sessionId);
-    
-    console.log("Session retrieved successfully:", session.id, "Status:", session.payment_status);
-    
+
+    console.log(
+      "Session retrieved successfully:",
+      session.id,
+      "Status:",
+      session.payment_status
+    );
+
     res.json({
       id: session.id,
       payment_status: session.payment_status,
       customer_email: session.customer_details?.email,
       amount_total: session.amount_total,
       currency: session.currency,
-      metadata: session.metadata
+      metadata: session.metadata,
     });
   } catch (err) {
     console.error("Error retrieving session:", err);
-    res.status(500).json({ 
-      error: "Failed to retrieve session", 
-      details: err.message 
+    res.status(500).json({
+      error: "Failed to retrieve session",
+      details: err.message,
     });
   }
 });
@@ -222,16 +227,16 @@ app.get("/api/stripe/test", async (req, res) => {
   try {
     // Test if Stripe is working by listing products (should return empty list)
     const products = await stripe.products.list({ limit: 1 });
-    res.json({ 
-      status: "Stripe connection successful", 
+    res.json({
+      status: "Stripe connection successful",
       hasProducts: products.data.length > 0,
-      availablePlans: Object.keys(plans)
+      availablePlans: Object.keys(plans),
     });
   } catch (err) {
     console.error("Stripe test failed:", err);
-    res.status(500).json({ 
-      error: "Stripe connection failed", 
-      details: err.message 
+    res.status(500).json({
+      error: "Stripe connection failed",
+      details: err.message,
     });
   }
 });
@@ -324,17 +329,3 @@ if (process.env.NODE_ENV === "production") {
     res.sendFile(path.join(__dirname, "../frontend", "dist", "index.html"));
   });
 }
-
-// Global error handlers
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
-
-// Keep the process alive
-process.stdin.resume();
